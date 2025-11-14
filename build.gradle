@@ -34,6 +34,17 @@ tasks.withType(JavaCompile).configureEach {
 	options.release.set(11)
 }
 
+tasks.withType(Test).configureEach {
+	jvmArgs '--add-exports', 'java.desktop/com.apple.eawt=ALL-UNNAMED'
+}
+
+tasks.register('runClient', JavaExec) {
+	group = 'application'
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass.set('com.flippingtool.ExamplePluginTest')
+	jvmArgs '--add-exports', 'java.desktop/com.apple.eawt=ALL-UNNAMED'
+}
+
 tasks.register('shadowJar', Jar) {
 	dependsOn configurations.testRuntimeClasspath
 	manifest {
