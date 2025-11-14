@@ -36,7 +36,7 @@ public class FlippingToolOverlay extends OverlayPanel
 		panelComponent.getChildren().clear();
 
 		panelComponent.getChildren().add(TitleComponent.builder()
-			.text("Flipping Tool")
+			.text("Flip Smart")
 			.color(Color.GREEN)
 			.build());
 

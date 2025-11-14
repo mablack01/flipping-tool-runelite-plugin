@@ -40,7 +40,7 @@ public interface FlippingToolConfig extends Config
 	@ConfigItem(
 		keyName = "apiUrl",
 		name = "API URL",
-		description = "URL of the flipping tool API"
+		description = "URL of the Flip Smart API"
 	)
 	default String apiUrl()
 	{

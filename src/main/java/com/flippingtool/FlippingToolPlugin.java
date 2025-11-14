@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @PluginDescriptor(
-	name = "Flipping Tool",
+	name = "Flip Smart",
 	description = "A tool to help with item flipping in the Grand Exchange",
 	tags = {"grand exchange", "flipping", "trading", "money making"}
 )
@@ -77,7 +77,7 @@ public class FlippingToolPlugin extends Plugin
 	@Override
 	protected void startUp() throws Exception
 	{
-		log.info("Flipping Tool started!");
+		log.info("Flip Smart started!");
 		overlayManager.add(overlay);
 		overlayManager.add(inventoryOverlay);
 		
@@ -91,7 +91,7 @@ public class FlippingToolPlugin extends Plugin
 	@Override
 	protected void shutDown() throws Exception
 	{
-		log.info("Flipping Tool stopped!");
+		log.info("Flip Smart stopped!");
 		overlayManager.remove(overlay);
 		overlayManager.remove(inventoryOverlay);
 		itemAnalysisCache.clear();
