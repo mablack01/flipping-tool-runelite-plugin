@@ -2,6 +2,11 @@
 
 A RuneLite plugin that integrates with the Flipping Tool API to automatically analyze items in your inventory and highlight profitable flipping opportunities with visual indicators.
 
+<img width="245" height="321" alt="Screenshot 2025-11-14 at 12 50 59 AM" src="https://github.com/user-attachments/assets/3a8d00f9-1466-43d4-9a29-0c3c0f50a965" />
+
+<img width="142" height="184" alt="Screenshot 2025-11-14 at 12 51 06 AM" src="https://github.com/user-attachments/assets/d4f067c7-fd22-41d9-a663-57f9b6be9135" />
+
+
 ## Features
 
 - 🔍 **Inventory Insights** - Monitors all items in your inventory in real-time and highlights good potential flips
