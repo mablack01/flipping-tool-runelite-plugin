@@ -4,21 +4,19 @@ A RuneLite plugin that integrates with the Flipping Tool API to automatically an
 
 ## Features
 
-- 🔍 **Automatic Inventory Scanning** - Monitors all items in your inventory in real-time
+- 🔍 **Inventory Insights** - Monitors all items in your inventory in real-time and highlights good potential flips
 - 📊 **API-Powered Analysis** - Queries the Flipping Tool API for comprehensive item analysis including:
-  - Buy/sell prices with Grand Exchange tax calculations
+  - Active buy and sell prices
   - Net profit margin after 2% GE tax
   - ROI percentage
   - Liquidity score (trade volume analysis)
   - Risk assessment (price volatility)
   - Overall efficiency scoring
-- 🎨 **Visual Highlighting** - Draws blue boxes around items that are good flipping opportunities
 - 📈 **Smart Scoring** - Uses weighted efficiency algorithm combining:
   - 40% ROI (return on investment)
   - 30% Liquidity (how fast it trades)
   - 30% Safety (inverse of risk)
-- ⚡ **Performance Optimized** - Async API calls with 1-minute caching to avoid spam
-- 📱 **Info Overlay** - Shows count of good flips and details about the best opportunity
+- 📱 **Info Overlay** - Shows details about the best flip opportunity in your inventory
 
 ## What Makes a "Good Flip"?
 
@@ -169,22 +167,7 @@ To create a JAR for distribution:
 
 The JAR will be in `build/libs/`.
 
-## Submitting to Plugin Hub
-
-When ready to publish:
-
-1. Commit and push your changes to GitHub
-2. Fork [runelite/plugin-hub](https://github.com/runelite/plugin-hub)
-3. Create a new file in `plugins/` with your repository URL and commit hash
-4. Submit a pull request
-
-See the [Plugin Hub guide](https://github.com/runelite/plugin-hub#submitting-a-plugin) for detailed instructions.
-
 ## Troubleshooting
-
-### Plugin won't start
-- Check RuneLite logs for errors
-- Verify Java 17 is installed (for development)
 
 ### No items are being highlighted
 - **Check API URL is configured correctly** in plugin settings
