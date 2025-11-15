@@ -58,6 +58,9 @@ public class FlipSmartPlugin extends Plugin
 	@Inject
 	private net.runelite.client.ui.ClientToolbar clientToolbar;
 
+	@Inject
+	private net.runelite.client.game.ItemManager itemManager;
+
 	// Store analysis results for items
 	@Getter
 	private final Map<Integer, FlipAnalysis> itemAnalysisCache = new ConcurrentHashMap<>();
@@ -366,7 +369,7 @@ public class FlipSmartPlugin extends Plugin
 	 */
 	private void initializeFlipFinderPanel()
 	{
-		flipFinderPanel = new FlipFinderPanel(config, apiClient)
+		flipFinderPanel = new FlipFinderPanel(config, apiClient, itemManager)
 		{
 			@Override
 			protected Integer getCashStack()

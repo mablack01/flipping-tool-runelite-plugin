@@ -1,15 +1,18 @@
 package com.flipsmart;
 
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.client.game.ItemManager;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.ui.components.PluginErrorPanel;
+import net.runelite.client.util.AsyncBufferedImage;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -18,17 +21,19 @@ public class FlipFinderPanel extends PluginPanel
 {
 	private final FlipSmartConfig config;
 	private final FlipSmartApiClient apiClient;
+	private final ItemManager itemManager;
 	private final JPanel listContainer = new JPanel();
 	private final JLabel statusLabel = new JLabel("Loading...");
 	private final JButton refreshButton = new JButton("Refresh");
 	private final JComboBox<FlipSmartConfig.FlipStyle> flipStyleDropdown;
 	private final List<FlipRecommendation> currentRecommendations = new ArrayList<>();
 
-	public FlipFinderPanel(FlipSmartConfig config, FlipSmartApiClient apiClient)
+	public FlipFinderPanel(FlipSmartConfig config, FlipSmartApiClient apiClient, ItemManager itemManager)
 	{
 		super(false);
 		this.config = config;
 		this.apiClient = apiClient;
+		this.itemManager = itemManager;
 
 		setLayout(new BorderLayout());
 		setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -257,19 +262,49 @@ public class FlipFinderPanel extends PluginPanel
 		panel.setBorder(new EmptyBorder(8, 10, 8, 10));
 		panel.setCursor(new Cursor(Cursor.HAND_CURSOR));
 
-		// Item name and efficiency
+		// Item name and efficiency panel
 		JPanel topPanel = new JPanel(new BorderLayout());
 		topPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+		// Left side: Item icon and name
+		JPanel namePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+		namePanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+		// Get item image
+		AsyncBufferedImage itemImage = itemManager.getImage(rec.getItemId());
+		JLabel iconLabel = new JLabel();
+		if (itemImage != null)
+		{
+			// Set initial icon
+			iconLabel.setIcon(new ImageIcon(itemImage));
+			
+			// Add observer to update when image loads
+			itemImage.onLoaded(() ->
+			{
+				iconLabel.setIcon(new ImageIcon(itemImage));
+				iconLabel.revalidate();
+				iconLabel.repaint();
+			});
+		}
+		else
+		{
+			// Placeholder if no image
+			iconLabel.setPreferredSize(new Dimension(32, 32));
+		}
 
 		JLabel nameLabel = new JLabel(rec.getItemName());
 		nameLabel.setForeground(Color.WHITE);
 		nameLabel.setFont(new Font("Arial", Font.BOLD, 14));
 
+		namePanel.add(iconLabel);
+		namePanel.add(nameLabel);
+
+		// Right side: Efficiency score
 		JLabel efficiencyLabel = new JLabel(String.format("%.0f", rec.getEfficiencyScore()));
 		efficiencyLabel.setForeground(getEfficiencyColor(rec.getEfficiencyScore()));
 		efficiencyLabel.setFont(new Font("Arial", Font.BOLD, 14));
 
-		topPanel.add(nameLabel, BorderLayout.WEST);
+		topPanel.add(namePanel, BorderLayout.WEST);
 		topPanel.add(efficiencyLabel, BorderLayout.EAST);
 
 		// Details panel
