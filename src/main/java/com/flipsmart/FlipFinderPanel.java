@@ -21,6 +21,7 @@ public class FlipFinderPanel extends PluginPanel
 	private final JPanel listContainer = new JPanel();
 	private final JLabel statusLabel = new JLabel("Loading...");
 	private final JButton refreshButton = new JButton("Refresh");
+	private final JComboBox<FlipSmartConfig.FlipStyle> flipStyleDropdown;
 	private final List<FlipRecommendation> currentRecommendations = new ArrayList<>();
 
 	public FlipFinderPanel(FlipSmartConfig config, FlipSmartApiClient apiClient)
@@ -47,6 +48,53 @@ public class FlipFinderPanel extends PluginPanel
 		headerPanel.add(titleLabel, BorderLayout.WEST);
 		headerPanel.add(refreshButton, BorderLayout.EAST);
 
+		// Controls panel (flip style dropdown)
+		JPanel controlsPanel = new JPanel(new BorderLayout());
+		controlsPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		controlsPanel.setBorder(new EmptyBorder(5, 10, 5, 10));
+
+		JLabel flipStyleLabel = new JLabel("Style: ");
+		flipStyleLabel.setForeground(Color.LIGHT_GRAY);
+		flipStyleLabel.setFont(new Font("Arial", Font.PLAIN, 12));
+
+		// Create flip style dropdown
+		flipStyleDropdown = new JComboBox<>(FlipSmartConfig.FlipStyle.values());
+		flipStyleDropdown.setSelectedItem(config.flipStyle());
+		flipStyleDropdown.setFocusable(false);
+		flipStyleDropdown.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		flipStyleDropdown.setForeground(Color.WHITE);
+		flipStyleDropdown.addActionListener(e -> {
+			// Refresh recommendations when flip style changes
+			refresh();
+		});
+
+		// Custom renderer for better appearance
+		flipStyleDropdown.setRenderer(new DefaultListCellRenderer() {
+			@Override
+			public Component getListCellRendererComponent(JList<?> list, Object value, int index,
+														  boolean isSelected, boolean cellHasFocus) {
+				Component c = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+				if (c instanceof JLabel && value instanceof FlipSmartConfig.FlipStyle) {
+					FlipSmartConfig.FlipStyle style = (FlipSmartConfig.FlipStyle) value;
+					((JLabel) c).setText(style.name().charAt(0) + style.name().substring(1).toLowerCase());
+				}
+				if (isSelected) {
+					c.setBackground(ColorScheme.BRAND_ORANGE);
+				} else {
+					c.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+				}
+				c.setForeground(Color.WHITE);
+				return c;
+			}
+		});
+
+		JPanel dropdownWrapper = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+		dropdownWrapper.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		dropdownWrapper.add(flipStyleLabel);
+		dropdownWrapper.add(flipStyleDropdown);
+
+		controlsPanel.add(dropdownWrapper, BorderLayout.WEST);
+
 		// Status panel
 		JPanel statusPanel = new JPanel(new BorderLayout());
 		statusPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -54,6 +102,14 @@ public class FlipFinderPanel extends PluginPanel
 		statusLabel.setForeground(Color.LIGHT_GRAY);
 		statusLabel.setFont(new Font("Arial", Font.PLAIN, 12));
 		statusPanel.add(statusLabel, BorderLayout.CENTER);
+
+		// Combine controls and status into top panel
+		JPanel topPanel = new JPanel();
+		topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
+		topPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		topPanel.add(headerPanel);
+		topPanel.add(controlsPanel);
+		topPanel.add(statusPanel);
 
 		// List container
 		listContainer.setLayout(new BoxLayout(listContainer, BoxLayout.Y_AXIS));
@@ -64,9 +120,8 @@ public class FlipFinderPanel extends PluginPanel
 		scrollPane.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
 		scrollPane.setBorder(BorderFactory.createEmptyBorder());
 
-		add(headerPanel, BorderLayout.NORTH);
-		add(statusPanel, BorderLayout.CENTER);
-		add(scrollPane, BorderLayout.SOUTH);
+		add(topPanel, BorderLayout.NORTH);
+		add(scrollPane, BorderLayout.CENTER);
 
 		// Initial load
 		refresh();
@@ -85,7 +140,9 @@ public class FlipFinderPanel extends PluginPanel
 
 		// Fetch recommendations asynchronously
 		Integer cashStack = getCashStack();
-		String flipStyle = config.flipStyle().getApiValue();
+		// Use the selected flip style from dropdown instead of config
+		FlipSmartConfig.FlipStyle selectedStyle = (FlipSmartConfig.FlipStyle) flipStyleDropdown.getSelectedItem();
+		String flipStyle = selectedStyle != null ? selectedStyle.getApiValue() : config.flipStyle().getApiValue();
 		int limit = Math.max(1, Math.min(50, config.flipFinderLimit()));
 
 		apiClient.getFlipRecommendationsAsync(cashStack, flipStyle, limit).thenAccept(response ->
@@ -221,12 +278,19 @@ public class FlipFinderPanel extends PluginPanel
 		detailsPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		detailsPanel.setBorder(new EmptyBorder(5, 0, 0, 0));
 
-		// Buy/Sell prices
+		// Recommended Buy/Sell prices
 		JLabel priceLabel = new JLabel(String.format("Buy: %s | Sell: %s",
-			formatGP(rec.getBuyPrice()),
-			formatGP(rec.getSellPrice())));
+			formatGP(rec.getRecommendedBuyPrice()),
+			formatGP(rec.getRecommendedSellPrice())));
 		priceLabel.setForeground(Color.LIGHT_GRAY);
 		priceLabel.setFont(new Font("Arial", Font.PLAIN, 12));
+
+		// Quantity
+		JLabel quantityLabel = new JLabel(String.format("Qty: %d (Limit: %d)",
+			rec.getRecommendedQuantity(),
+			rec.getBuyLimit()));
+		quantityLabel.setForeground(new Color(200, 200, 255));
+		quantityLabel.setFont(new Font("Arial", Font.PLAIN, 12));
 
 		// Margin and ROI
 		JLabel marginLabel = new JLabel(String.format("Margin: %s (%s ROI)",
@@ -235,14 +299,16 @@ public class FlipFinderPanel extends PluginPanel
 		marginLabel.setForeground(new Color(100, 255, 100));
 		marginLabel.setFont(new Font("Arial", Font.PLAIN, 12));
 
-		// Potential profit
-		JLabel profitLabel = new JLabel(String.format("Potential: %s | Limit: %d",
+		// Potential profit and total cost
+		JLabel profitLabel = new JLabel(String.format("Profit: %s | Cost: %s",
 			formatGP(rec.getPotentialProfit()),
-			rec.getBuyLimit()));
+			formatGP(rec.getTotalCost())));
 		profitLabel.setForeground(new Color(255, 215, 0));
 		profitLabel.setFont(new Font("Arial", Font.PLAIN, 12));
 
 		detailsPanel.add(priceLabel);
+		detailsPanel.add(Box.createRigidArea(new Dimension(0, 2)));
+		detailsPanel.add(quantityLabel);
 		detailsPanel.add(Box.createRigidArea(new Dimension(0, 2)));
 		detailsPanel.add(marginLabel);
 		detailsPanel.add(Box.createRigidArea(new Dimension(0, 2)));

@@ -17,11 +17,22 @@ public class FlipRecommendation
 	@SerializedName("buy_limit")
 	private Integer buyLimit;
 
-	@SerializedName("buy_price")
-	private int buyPrice;
+	// Instant prices (reference only)
+	@SerializedName("instant_buy_price")
+	private int instantBuyPrice;
 
-	@SerializedName("sell_price")
-	private int sellPrice;
+	@SerializedName("instant_sell_price")
+	private int instantSellPrice;
+
+	// Recommended prices (for GE offers)
+	@SerializedName("recommended_buy_price")
+	private int recommendedBuyPrice;
+
+	@SerializedName("recommended_sell_price")
+	private int recommendedSellPrice;
+
+	@SerializedName("recommended_quantity")
+	private int recommendedQuantity;
 
 	private int margin;
 
@@ -58,8 +69,18 @@ public class FlipRecommendation
 	@SerializedName("potential_profit")
 	private int potentialProfit;
 
+	@SerializedName("total_cost")
+	private int totalCost;
+
+	// Deprecated fields (kept for backwards compatibility)
+	@SerializedName("buy_price")
+	private Integer buyPrice;
+
+	@SerializedName("sell_price")
+	private Integer sellPrice;
+
 	@SerializedName("cost_per_flip")
-	private int costPerFlip;
+	private Integer costPerFlip;
 
 	/**
 	 * Format GP amount for display
