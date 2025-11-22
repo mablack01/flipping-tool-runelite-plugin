@@ -3,54 +3,27 @@ package com.flipsmart;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
+import net.runelite.client.config.ConfigSection;
 
 @ConfigGroup("flipsmart")
 public interface FlipSmartConfig extends Config
 {
-	@ConfigItem(
-		keyName = "showOverlay",
-		name = "Show Overlay",
-		description = "Toggles the display of the flipping overlay"
+	// ============================================
+	// Authentication Section
+	// ============================================
+	@ConfigSection(
+		name = "Authentication",
+		description = "Account settings for Flip Smart API",
+		position = 0
 	)
-	default boolean showOverlay()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "minProfit",
-		name = "Minimum Profit",
-		description = "Minimum profit margin to highlight (in GP)"
-	)
-	default int minimumProfit()
-	{
-		return 100;
-	}
-
-	@ConfigItem(
-		keyName = "trackHistory",
-		name = "Track History",
-		description = "Track flipping history across sessions"
-	)
-	default boolean trackHistory()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "apiUrl",
-		name = "API URL",
-		description = "URL of the Flip Smart API"
-	)
-	default String apiUrl()
-	{
-		return "http://localhost:8000";
-	}
+	String authenticationSection = "authentication";
 
 	@ConfigItem(
 		keyName = "email",
 		name = "Email",
-		description = "Your account email for authentication"
+		description = "Your account email for authentication",
+		section = authenticationSection,
+		position = 0
 	)
 	default String email()
 	{
@@ -61,7 +34,9 @@ public interface FlipSmartConfig extends Config
 		keyName = "password",
 		name = "Password",
 		description = "Your account password",
-		secret = true
+		secret = true,
+		section = authenticationSection,
+		position = 1
 	)
 	default String password()
 	{
@@ -69,29 +44,34 @@ public interface FlipSmartConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "highlightGoodFlips",
-		name = "Highlight Good Flips",
-		description = "Highlight items in inventory that are good flips"
+		keyName = "apiUrl",
+		name = "API URL",
+		description = "URL of the Flip Smart API",
+		section = authenticationSection,
+		position = 2
 	)
-	default boolean highlightGoodFlips()
+	default String apiUrl()
 	{
-		return true;
+		return "http://localhost:8000";
 	}
 
-	@ConfigItem(
-		keyName = "minEfficiencyScore",
-		name = "Minimum Efficiency Score",
-		description = "Minimum efficiency score to highlight an item (0-100)"
+	// ============================================
+	// Flip Finder Section
+	// ============================================
+	@ConfigSection(
+		name = "Flip Finder",
+		description = "Settings for flip recommendations",
+		position = 1,
+		closedByDefault = false
 	)
-	default int minEfficiencyScore()
-	{
-		return 50;
-	}
+	String flipFinderSection = "flipFinder";
 
 	@ConfigItem(
 		keyName = "showFlipFinder",
-		name = "Show Flip Finder",
-		description = "Show the Flip Finder panel in the sidebar"
+		name = "Enable Flip Finder",
+		description = "Show the Flip Finder panel in the sidebar",
+		section = flipFinderSection,
+		position = 0
 	)
 	default boolean showFlipFinder()
 	{
@@ -101,7 +81,9 @@ public interface FlipSmartConfig extends Config
 	@ConfigItem(
 		keyName = "flipStyle",
 		name = "Flip Style",
-		description = "Your preferred flipping style"
+		description = "Your preferred flipping style",
+		section = flipFinderSection,
+		position = 1
 	)
 	default FlipStyle flipStyle()
 	{
@@ -111,7 +93,9 @@ public interface FlipSmartConfig extends Config
 	@ConfigItem(
 		keyName = "flipFinderLimit",
 		name = "Number of Recommendations",
-		description = "Number of flip recommendations to show (1-50)"
+		description = "Number of flip recommendations to show (1-50)",
+		section = flipFinderSection,
+		position = 2
 	)
 	default int flipFinderLimit()
 	{
@@ -121,13 +105,76 @@ public interface FlipSmartConfig extends Config
 	@ConfigItem(
 		keyName = "flipFinderRefreshMinutes",
 		name = "Refresh Interval (minutes)",
-		description = "How often to refresh flip recommendations (1-60 minutes)"
+		description = "How often to refresh flip recommendations (1-60 minutes)",
+		section = flipFinderSection,
+		position = 3
 	)
 	default int flipFinderRefreshMinutes()
 	{
 		return 5;
 	}
 
+	@ConfigItem(
+		keyName = "minProfit",
+		name = "Minimum Profit",
+		description = "Minimum profit margin to highlight (in GP)",
+		section = flipFinderSection,
+		position = 4
+	)
+	default int minimumProfit()
+	{
+		return 100;
+	}
+
+	// ============================================
+	// Display Section
+	// ============================================
+	@ConfigSection(
+		name = "Display",
+		description = "Display and overlay settings",
+		position = 2,
+		closedByDefault = false
+	)
+	String displaySection = "display";
+
+	@ConfigItem(
+		keyName = "showOverlay",
+		name = "Show Overlay",
+		description = "Toggles the display of the flipping overlay",
+		section = displaySection,
+		position = 0
+	)
+	default boolean showOverlay()
+	{
+		return true;
+	}
+
+	// ============================================
+	// General Section
+	// ============================================
+	@ConfigSection(
+		name = "General",
+		description = "General plugin settings",
+		position = 3,
+		closedByDefault = true
+	)
+	String generalSection = "general";
+
+	@ConfigItem(
+		keyName = "trackHistory",
+		name = "Track History",
+		description = "Track flipping history across sessions",
+		section = generalSection,
+		position = 0
+	)
+	default boolean trackHistory()
+	{
+		return true;
+	}
+
+	// ============================================
+	// Flip Style Enum
+	// ============================================
 	enum FlipStyle
 	{
 		CONSERVATIVE("conservative"),
