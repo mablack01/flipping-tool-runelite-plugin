@@ -32,11 +32,12 @@ public class FlipSmartApiClient
 	private long tokenExpiry = 0;
 
 	@Inject
-	public FlipSmartApiClient(FlipSmartConfig config)
+	public FlipSmartApiClient(FlipSmartConfig config, Gson gson, OkHttpClient okHttpClient)
 	{
 		this.config = config;
-		this.gson = new Gson();
-		this.httpClient = new OkHttpClient.Builder()
+		this.gson = gson;
+		// Customize the injected OkHttpClient with our timeout requirements
+		this.httpClient = okHttpClient.newBuilder()
 			.connectTimeout(5, TimeUnit.SECONDS)
 			.readTimeout(10, TimeUnit.SECONDS)
 			.build();
