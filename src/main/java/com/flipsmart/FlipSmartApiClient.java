@@ -35,7 +35,9 @@ public class FlipSmartApiClient
 	public FlipSmartApiClient(FlipSmartConfig config, Gson gson, OkHttpClient okHttpClient)
 	{
 		this.config = config;
-		this.gson = gson;
+		// Use the injected Gson's builder to create a customized instance
+		// This ensures we follow RuneLite's requirements while maintaining compatibility
+		this.gson = gson.newBuilder().create();
 		// Customize the injected OkHttpClient with our timeout requirements
 		this.httpClient = okHttpClient.newBuilder()
 			.connectTimeout(5, TimeUnit.SECONDS)
