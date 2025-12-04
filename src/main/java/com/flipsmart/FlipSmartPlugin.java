@@ -30,7 +30,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @PluginDescriptor(
 	name = "Flip Smart",
 	description = "A tool to help with item flipping in the Grand Exchange",
-	tags = {"grand exchange", "flipping", "trading", "money making"}
+	tags = {"grand exchange", "flipping", "trading", "money making"},
+	enabledByDefault = false
 )
 public class FlipSmartPlugin extends Plugin
 {
@@ -425,21 +426,15 @@ public class FlipSmartPlugin extends Plugin
 				}
 
 				// Refresh active flips panel if it exists
+				// Use a Swing Timer to add a small delay without blocking the EDT
 				if (flipFinderPanel != null)
 				{
-					javax.swing.SwingUtilities.invokeLater(() -> {
-						// Small delay to allow the backend to process
-						try
-						{
-							Thread.sleep(500);
-						}
-						catch (InterruptedException e)
-						{
-							// Ignore
-						}
+					javax.swing.Timer refreshTimer = new javax.swing.Timer(500, e -> {
 						// This will update both pending orders and active flips
 						flipFinderPanel.refresh();
 					});
+					refreshTimer.setRepeats(false);
+					refreshTimer.start();
 				}
 			}
 

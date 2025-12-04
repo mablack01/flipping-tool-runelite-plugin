@@ -11,7 +11,8 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 @Slf4j
 @Singleton
@@ -29,21 +30,20 @@ public class FlipSmartApiClient
 	private static final long CACHE_DURATION_MS = 60_000; // 1 minute cache
 	
 	// JWT token management
-	private String jwtToken = null;
-	private long tokenExpiry = 0;
+	private volatile String jwtToken = null;
+	private volatile long tokenExpiry = 0;
+	
+	// Lock for authentication to prevent concurrent auth attempts
+	private final Object authLock = new Object();
 
 	@Inject
 	public FlipSmartApiClient(FlipSmartConfig config, Gson gson, OkHttpClient okHttpClient)
 	{
 		this.config = config;
 		// Use the injected Gson's builder to create a customized instance
-		// This ensures we follow RuneLite's requirements while maintaining compatibility
 		this.gson = gson.newBuilder().create();
-		// Customize the injected OkHttpClient with our timeout requirements
-		this.httpClient = okHttpClient.newBuilder()
-			.connectTimeout(15, TimeUnit.SECONDS)
-			.readTimeout(30, TimeUnit.SECONDS)
-			.build();
+		// Use the injected OkHttpClient directly as required by RuneLite
+		this.httpClient = okHttpClient;
 	}
 
 	/**
@@ -76,30 +76,143 @@ public class FlipSmartApiClient
 	}
 	
 	/**
-	 * Authenticate with the API and obtain a JWT token via login
+	 * Execute an HTTP request asynchronously with automatic retry on 401
+	 * This is the core method that handles all HTTP requests off the main threads
+	 * 
+	 * @param request The request to execute
+	 * @param responseHandler Function to process successful response body and return result
+	 * @param errorHandler Consumer to handle errors
+	 * @param retryOnAuth Whether to retry with re-authentication on 401
+	 * @param <T> The return type
+	 * @return CompletableFuture with the result
 	 */
-	private boolean authenticate()
+	private <T> CompletableFuture<T> executeAsync(Request request, Function<String, T> responseHandler, 
+												   Consumer<String> errorHandler, boolean retryOnAuth)
 	{
-		AuthResult result = login(config.email(), config.password());
-		return result.success;
+		CompletableFuture<T> future = new CompletableFuture<>();
+		
+		httpClient.newCall(request).enqueue(new Callback()
+		{
+			@Override
+			public void onFailure(Call call, IOException e)
+			{
+				log.debug("Request failed: {}", e.getMessage());
+				if (errorHandler != null)
+				{
+					errorHandler.accept("Connection error: " + e.getMessage());
+				}
+				future.complete(null);
+			}
+
+			@Override
+			public void onResponse(Call call, Response response) throws IOException
+			{
+				try (response)
+				{
+					if (response.code() == 401 && retryOnAuth)
+					{
+						// Token might have expired, try to re-authenticate
+						log.debug("Received 401, attempting to re-authenticate");
+						jwtToken = null;
+						
+						authenticateAsync().thenAccept(authSuccess ->
+						{
+							if (authSuccess)
+							{
+								// Rebuild request with new token
+								Request retryRequest = request.newBuilder()
+									.header("Authorization", "Bearer " + jwtToken)
+									.build();
+								
+								// Retry without auth retry to prevent infinite loop
+								executeAsync(retryRequest, responseHandler, errorHandler, false)
+									.thenAccept(future::complete);
+							}
+							else
+							{
+								future.complete(null);
+							}
+						});
+						return;
+					}
+					
+					if (!response.isSuccessful())
+					{
+						log.debug("Request returned error: {}", response.code());
+						if (errorHandler != null)
+						{
+							errorHandler.accept("Error " + response.code());
+						}
+						future.complete(null);
+						return;
+					}
+
+					String jsonData = response.body() != null ? response.body().string() : "";
+					T result = responseHandler.apply(jsonData);
+					future.complete(result);
+				}
+				catch (Exception e)
+				{
+					log.debug("Error processing response: {}", e.getMessage());
+					future.complete(null);
+				}
+			}
+		});
+		
+		return future;
 	}
 	
 	/**
-	 * Login with email and password
-	 * @return AuthResult with success status and message
+	 * Execute an authenticated request asynchronously
 	 */
-	public AuthResult login(String email, String password)
+	private <T> CompletableFuture<T> executeAuthenticatedAsync(Request.Builder requestBuilder,
+															   Function<String, T> responseHandler)
 	{
+		return ensureAuthenticatedAsync().thenCompose(authenticated ->
+		{
+			if (!authenticated)
+			{
+				log.debug("Failed to authenticate");
+				return CompletableFuture.completedFuture(null);
+			}
+			
+			Request request = requestBuilder
+				.header("Authorization", "Bearer " + jwtToken)
+				.build();
+			
+			return executeAsync(request, responseHandler, null, true);
+		});
+	}
+	
+	/**
+	 * Authenticate with the API and obtain a JWT token via login (async)
+	 */
+	private CompletableFuture<Boolean> authenticateAsync()
+	{
+		return loginAsync(config.email(), config.password())
+			.thenApply(result -> result.success);
+	}
+	
+	/**
+	 * Login with email and password (async)
+	 * @return CompletableFuture with AuthResult containing success status and message
+	 */
+	public CompletableFuture<AuthResult> loginAsync(String email, String password)
+	{
+		CompletableFuture<AuthResult> future = new CompletableFuture<>();
+		
 		String apiUrl = getApiUrl();
 		
 		if (email == null || email.isEmpty())
 		{
-			return new AuthResult(false, "Please enter your email address");
+			future.complete(new AuthResult(false, "Please enter your email address"));
+			return future;
 		}
 		
 		if (password == null || password.isEmpty())
 		{
-			return new AuthResult(false, "Please enter your password");
+			future.complete(new AuthResult(false, "Please enter your password"));
+			return future;
 		}
 		
 		String url = String.format("%s/auth/login", apiUrl);
@@ -115,60 +228,105 @@ public class FlipSmartApiClient
 			.post(body)
 			.build();
 		
-		try (Response response = httpClient.newCall(request).execute())
+		httpClient.newCall(request).enqueue(new Callback()
 		{
-			if (!response.isSuccessful())
+			@Override
+			public void onFailure(Call call, IOException e)
 			{
-				if (response.code() == 401)
-				{
-					return new AuthResult(false, "Incorrect email or password");
-				}
-				else if (response.code() == 404)
-				{
-					return new AuthResult(false, "Account not found. Please sign up first.");
-				}
-				return new AuthResult(false, "Login failed (error " + response.code() + ")");
+				log.error("Failed to authenticate with API: {}", e.getMessage());
+				future.complete(new AuthResult(false, "Connection error: " + e.getMessage()));
 			}
-			
-			String jsonData = response.body().string();
-			JsonObject tokenResponse = gson.fromJson(jsonData, JsonObject.class);
-			jwtToken = tokenResponse.get("access_token").getAsString();
-			
-			// JWT tokens from this API expire in 7 days, but we'll check earlier
-			// Set expiry to 6 days to refresh before actual expiry
-			tokenExpiry = System.currentTimeMillis() + (6 * 24 * 60 * 60 * 1000L);
-			
-			log.info("Successfully authenticated with API");
-			return new AuthResult(true, "Login successful!");
-		}
-		catch (IOException e)
+
+			@Override
+			public void onResponse(Call call, Response response) throws IOException
+			{
+				try (response)
+				{
+					if (!response.isSuccessful())
+					{
+						if (response.code() == 401)
+						{
+							future.complete(new AuthResult(false, "Incorrect email or password"));
+						}
+						else if (response.code() == 404)
+						{
+							future.complete(new AuthResult(false, "Account not found. Please sign up first."));
+						}
+						else
+						{
+							future.complete(new AuthResult(false, "Login failed (error " + response.code() + ")"));
+						}
+						return;
+					}
+					
+					String jsonData = response.body().string();
+					JsonObject tokenResponse = gson.fromJson(jsonData, JsonObject.class);
+					
+					synchronized (authLock)
+					{
+						jwtToken = tokenResponse.get("access_token").getAsString();
+						// JWT tokens from this API expire in 7 days, but we'll check earlier
+						// Set expiry to 6 days to refresh before actual expiry
+						tokenExpiry = System.currentTimeMillis() + (6 * 24 * 60 * 60 * 1000L);
+					}
+					
+					log.info("Successfully authenticated with API");
+					future.complete(new AuthResult(true, "Login successful!"));
+				}
+				catch (Exception e)
+				{
+					log.error("Error processing login response: {}", e.getMessage());
+					future.complete(new AuthResult(false, "Error processing response"));
+				}
+			}
+		});
+		
+		return future;
+	}
+	
+	/**
+	 * Synchronous login wrapper for backward compatibility
+	 * Note: This should only be called from background threads
+	 */
+	public AuthResult login(String email, String password)
+	{
+		try
 		{
-			log.error("Failed to authenticate with API: {}", e.getMessage());
-			return new AuthResult(false, "Connection error: " + e.getMessage());
+			return loginAsync(email, password).get();
+		}
+		catch (Exception e)
+		{
+			log.error("Login failed: {}", e.getMessage());
+			return new AuthResult(false, "Login failed: " + e.getMessage());
 		}
 	}
 	
 	/**
-	 * Sign up a new account with email and password
-	 * @return AuthResult with success status and message
+	 * Sign up a new account with email and password (async)
+	 * @return CompletableFuture with AuthResult containing success status and message
 	 */
-	public AuthResult signup(String email, String password)
+	public CompletableFuture<AuthResult> signupAsync(String email, String password)
 	{
+		CompletableFuture<AuthResult> future = new CompletableFuture<>();
+		
 		String apiUrl = getApiUrl();
 		
 		if (email == null || email.isEmpty())
 		{
-			return new AuthResult(false, "Please enter your email address");
+			future.complete(new AuthResult(false, "Please enter your email address"));
+			return future;
 		}
 		
 		if (password == null || password.isEmpty())
 		{
-			return new AuthResult(false, "Please enter your password");
+			future.complete(new AuthResult(false, "Please enter your password"));
+			return future;
 		}
 		
 		if (password.length() < 6)
 		{
-			return new AuthResult(false, "Password must be at least 6 characters");
+			future.complete(new AuthResult(false, "Password must be at least 6 characters"));
+			return future;
 		}
 		
 		String url = String.format("%s/auth/signup", apiUrl);
@@ -184,32 +342,70 @@ public class FlipSmartApiClient
 			.post(body)
 			.build();
 		
-		try (Response response = httpClient.newCall(request).execute())
+		httpClient.newCall(request).enqueue(new Callback()
 		{
-			if (!response.isSuccessful())
+			@Override
+			public void onFailure(Call call, IOException e)
 			{
-				if (response.code() == 400)
-				{
-					return new AuthResult(false, "Email already registered. Please login instead.");
-				}
-				return new AuthResult(false, "Sign up failed (error " + response.code() + ")");
+				log.error("Failed to sign up with API: {}", e.getMessage());
+				future.complete(new AuthResult(false, "Connection error: " + e.getMessage()));
 			}
-			
-			String jsonData = response.body().string();
-			JsonObject tokenResponse = gson.fromJson(jsonData, JsonObject.class);
-			jwtToken = tokenResponse.get("access_token").getAsString();
-			
-			// JWT tokens from this API expire in 7 days, but we'll check earlier
-			// Set expiry to 6 days to refresh before actual expiry
-			tokenExpiry = System.currentTimeMillis() + (6 * 24 * 60 * 60 * 1000L);
-			
-			log.info("Successfully signed up and authenticated with API");
-			return new AuthResult(true, "Account created successfully!");
-		}
-		catch (IOException e)
+
+			@Override
+			public void onResponse(Call call, Response response) throws IOException
+			{
+				try (response)
+				{
+					if (!response.isSuccessful())
+					{
+						if (response.code() == 400)
+						{
+							future.complete(new AuthResult(false, "Email already registered. Please login instead."));
+						}
+						else
+						{
+							future.complete(new AuthResult(false, "Sign up failed (error " + response.code() + ")"));
+						}
+						return;
+					}
+					
+					String jsonData = response.body().string();
+					JsonObject tokenResponse = gson.fromJson(jsonData, JsonObject.class);
+					
+					synchronized (authLock)
+					{
+						jwtToken = tokenResponse.get("access_token").getAsString();
+						tokenExpiry = System.currentTimeMillis() + (6 * 24 * 60 * 60 * 1000L);
+					}
+					
+					log.info("Successfully signed up and authenticated with API");
+					future.complete(new AuthResult(true, "Account created successfully!"));
+				}
+				catch (Exception e)
+				{
+					log.error("Error processing signup response: {}", e.getMessage());
+					future.complete(new AuthResult(false, "Error processing response"));
+				}
+			}
+		});
+		
+		return future;
+	}
+	
+	/**
+	 * Synchronous signup wrapper for backward compatibility
+	 * Note: This should only be called from background threads
+	 */
+	public AuthResult signup(String email, String password)
+	{
+		try
 		{
-			log.error("Failed to sign up with API: {}", e.getMessage());
-			return new AuthResult(false, "Connection error: " + e.getMessage());
+			return signupAsync(email, password).get();
+		}
+		catch (Exception e)
+		{
+			log.error("Signup failed: {}", e.getMessage());
+			return new AuthResult(false, "Signup failed: " + e.getMessage());
 		}
 	}
 	
@@ -226,12 +422,15 @@ public class FlipSmartApiClient
 	 */
 	public void clearAuth()
 	{
-		jwtToken = null;
-		tokenExpiry = 0;
+		synchronized (authLock)
+		{
+			jwtToken = null;
+			tokenExpiry = 0;
+		}
 	}
 	
 	/**
-	 * Update the user's RuneScape Name on the server
+	 * Update the user's RuneScape Name on the server (async)
 	 */
 	public void updateRSN(String rsn)
 	{
@@ -241,51 +440,36 @@ public class FlipSmartApiClient
 		}
 		
 		String apiUrl = getApiUrl();
-		
-		// Ensure we have a valid token
-		if (!ensureAuthenticated())
-		{
-			log.error("Cannot update RSN - authentication failed");
-			return;
-		}
-		
 		String url = String.format("%s/auth/rsn?rsn=%s", apiUrl, rsn);
-		Request request = new Request.Builder()
-			.url(url)
-			.put(RequestBody.create(JSON, ""))
-			.header("Authorization", "Bearer " + jwtToken)
-			.build();
 		
-		try (Response response = httpClient.newCall(request).execute())
+		Request.Builder requestBuilder = new Request.Builder()
+			.url(url)
+			.put(RequestBody.create(JSON, ""));
+		
+		executeAuthenticatedAsync(requestBuilder, jsonData ->
 		{
-			if (response.isSuccessful())
-			{
-				log.info("Successfully updated RSN to: {}", rsn);
-			}
-			else
-			{
-				log.debug("Failed to update RSN: {}", response.code());
-			}
-		}
-		catch (IOException e)
+			log.info("Successfully updated RSN to: {}", rsn);
+			return true;
+		}).exceptionally(e ->
 		{
 			log.debug("Failed to update RSN: {}", e.getMessage());
-		}
+			return false;
+		});
 	}
 	
 	/**
-	 * Check if we have a valid JWT token, and refresh if needed
+	 * Check if we have a valid JWT token, and refresh if needed (async)
 	 */
-	private boolean ensureAuthenticated()
+	private CompletableFuture<Boolean> ensureAuthenticatedAsync()
 	{
 		// Check if we have a token and it's not expired
 		if (jwtToken != null && System.currentTimeMillis() < tokenExpiry)
 		{
-			return true;
+			return CompletableFuture.completedFuture(true);
 		}
 		
 		// Token is missing or expired, authenticate
-		return authenticate();
+		return authenticateAsync();
 	}
 
 	/**
@@ -293,103 +477,35 @@ public class FlipSmartApiClient
 	 */
 	public CompletableFuture<FlipAnalysis> getItemAnalysisAsync(int itemId)
 	{
-		return CompletableFuture.supplyAsync(() -> getItemAnalysis(itemId));
-	}
-
-	/**
-	 * Fetch item analysis from the API (synchronous)
-	 */
-	public FlipAnalysis getItemAnalysis(int itemId)
-	{
 		// Check cache first
 		CachedAnalysis cached = analysisCache.get(itemId);
 		if (cached != null && !cached.isExpired())
 		{
-			return cached.getAnalysis();
+			return CompletableFuture.completedFuture(cached.getAnalysis());
 		}
 
 		String apiUrl = getApiUrl();
-		
-		// Ensure we have a valid token
-		if (!ensureAuthenticated())
-		{
-			log.error("Failed to authenticate with API");
-			return null;
-		}
-
 		String url = String.format("%s/analysis/%d?timeframe=1h", apiUrl, itemId);
-		Request request = new Request.Builder()
+		
+		Request.Builder requestBuilder = new Request.Builder()
 			.url(url)
-			.header("Authorization", "Bearer " + jwtToken)
-			.get()
-			.build();
-
-		try (Response response = httpClient.newCall(request).execute())
+			.get();
+		
+		return executeAuthenticatedAsync(requestBuilder, jsonData ->
 		{
-			if (response.code() == 401)
-			{
-				// Token might have expired, try to re-authenticate once
-				log.debug("Received 401, attempting to re-authenticate");
-				jwtToken = null; // Clear the token
-				if (ensureAuthenticated())
-				{
-					// Retry the request with new token
-					Request retryRequest = new Request.Builder()
-						.url(url)
-						.header("Authorization", "Bearer " + jwtToken)
-						.get()
-						.build();
-					try (Response retryResponse = httpClient.newCall(retryRequest).execute())
-					{
-						if (!retryResponse.isSuccessful())
-						{
-							log.debug("API returned error for item {} after re-auth: {}", itemId, retryResponse.code());
-							return null;
-						}
-						String jsonData = retryResponse.body().string();
-						FlipAnalysis analysis = gson.fromJson(jsonData, FlipAnalysis.class);
-						analysisCache.put(itemId, new CachedAnalysis(analysis));
-						return analysis;
-					}
-				}
-				return null;
-			}
-			
-			if (!response.isSuccessful())
-			{
-				log.debug("API returned error for item {}: {}", itemId, response.code());
-				return null;
-			}
-
-			String jsonData = response.body().string();
 			FlipAnalysis analysis = gson.fromJson(jsonData, FlipAnalysis.class);
-
-			// Cache the result
 			analysisCache.put(itemId, new CachedAnalysis(analysis));
-
 			return analysis;
-		}
-		catch (IOException e)
-		{
-			log.debug("Failed to fetch analysis for item {}: {}", itemId, e.getMessage());
-			return null;
-		}
+		});
 	}
 
 	/**
-	 * Fetch flip recommendations from the API
+	 * Fetch flip recommendations from the API asynchronously
 	 */
-	public FlipFinderResponse getFlipRecommendations(Integer cashStack, String flipStyle, int limit)
+	public CompletableFuture<FlipFinderResponse> getFlipRecommendationsAsync(Integer cashStack, String flipStyle, int limit)
 	{
 		String apiUrl = getApiUrl();
 		
-		// Ensure we have a valid token
-		if (!ensureAuthenticated())
-		{
-			log.error("Failed to authenticate with API");
-			return null;
-		}
-
 		// Build URL with query parameters
 		StringBuilder urlBuilder = new StringBuilder();
 		urlBuilder.append(String.format("%s/flip-finder?limit=%d&flip_style=%s", apiUrl, limit, flipStyle));
@@ -400,79 +516,22 @@ public class FlipSmartApiClient
 		}
 		
 		String url = urlBuilder.toString();
-		Request request = new Request.Builder()
+		Request.Builder requestBuilder = new Request.Builder()
 			.url(url)
-			.header("Authorization", "Bearer " + jwtToken)
-			.get()
-			.build();
-
-		try (Response response = httpClient.newCall(request).execute())
-		{
-			if (response.code() == 401)
-			{
-				// Token might have expired, try to re-authenticate once
-				log.debug("Received 401, attempting to re-authenticate");
-				jwtToken = null; // Clear the token
-				if (ensureAuthenticated())
-				{
-					// Retry the request with new token
-					Request retryRequest = new Request.Builder()
-						.url(url)
-						.header("Authorization", "Bearer " + jwtToken)
-						.get()
-						.build();
-					try (Response retryResponse = httpClient.newCall(retryRequest).execute())
-					{
-						if (!retryResponse.isSuccessful())
-						{
-							log.warn("API returned error for flip finder after re-auth: {}", retryResponse.code());
-							return null;
-						}
-						String jsonData = retryResponse.body().string();
-						return gson.fromJson(jsonData, FlipFinderResponse.class);
-					}
-				}
-				return null;
-			}
-			
-			if (!response.isSuccessful())
-			{
-				log.warn("API returned error for flip finder: {}", response.code());
-				return null;
-			}
-
-			String jsonData = response.body().string();
-			return gson.fromJson(jsonData, FlipFinderResponse.class);
-		}
-		catch (IOException e)
-		{
-			log.warn("Failed to fetch flip recommendations: {}", e.getMessage());
-			return null;
-		}
+			.get();
+		
+		return executeAuthenticatedAsync(requestBuilder, jsonData ->
+			gson.fromJson(jsonData, FlipFinderResponse.class));
 	}
 
 	/**
-	 * Fetch flip recommendations asynchronously
+	 * Record a Grand Exchange transaction asynchronously
 	 */
-	public CompletableFuture<FlipFinderResponse> getFlipRecommendationsAsync(Integer cashStack, String flipStyle, int limit)
-	{
-		return CompletableFuture.supplyAsync(() -> getFlipRecommendations(cashStack, flipStyle, limit));
-	}
-
-	/**
-	 * Record a Grand Exchange transaction
-	 */
-	public void recordTransaction(int itemId, String itemName, boolean isBuy, int quantity, int pricePerItem, Integer geSlot, Integer recommendedSellPrice)
+	public CompletableFuture<Void> recordTransactionAsync(int itemId, String itemName, boolean isBuy, 
+														  int quantity, int pricePerItem, Integer geSlot, 
+														  Integer recommendedSellPrice)
 	{
 		String apiUrl = getApiUrl();
-		
-		// Ensure we have a valid token
-		if (!ensureAuthenticated())
-		{
-			log.error("Failed to authenticate with API");
-			return;
-		}
-
 		String url = String.format("%s/transactions", apiUrl);
 		
 		// Create JSON body
@@ -493,209 +552,32 @@ public class FlipSmartApiClient
 		
 		RequestBody body = RequestBody.create(JSON, jsonBody.toString());
 		
-		Request request = new Request.Builder()
+		Request.Builder requestBuilder = new Request.Builder()
 			.url(url)
-			.post(body)
-			.header("Authorization", "Bearer " + jwtToken)
-			.build();
+			.post(body);
 		
-		try (Response response = httpClient.newCall(request).execute())
+		return executeAuthenticatedAsync(requestBuilder, jsonData ->
 		{
-			if (response.code() == 401)
-			{
-				// Token might have expired, try to re-authenticate once
-				jwtToken = null;
-				if (ensureAuthenticated())
-				{
-					// Retry the request with new token
-					Request retryRequest = new Request.Builder()
-						.url(url)
-						.post(body)
-						.header("Authorization", "Bearer " + jwtToken)
-						.build();
-					try (Response retryResponse = httpClient.newCall(retryRequest).execute())
-					{
-						if (retryResponse.isSuccessful())
-						{
-							String jsonData = retryResponse.body().string();
-							JsonObject responseObj = gson.fromJson(jsonData, JsonObject.class);
-							log.info("Transaction recorded: {}", responseObj.get("message").getAsString());
-						}
-						else
-						{
-							log.warn("Failed to record transaction after re-auth: {}", retryResponse.code());
-						}
-					}
-				}
-				return;
-			}
-			
-			if (response.isSuccessful())
-			{
-				String jsonData = response.body().string();
-				JsonObject responseObj = gson.fromJson(jsonData, JsonObject.class);
-				log.info("Transaction recorded: {}", responseObj.get("message").getAsString());
-			}
-			else
-			{
-				log.warn("Failed to record transaction: {}", response.code());
-			}
-		}
-		catch (IOException e)
-		{
-			log.warn("Failed to record transaction: {}", e.getMessage());
-		}
-	}
-
-	/**
-	 * Record a transaction asynchronously
-	 */
-	public CompletableFuture<Void> recordTransactionAsync(int itemId, String itemName, boolean isBuy, int quantity, int pricePerItem, Integer geSlot, Integer recommendedSellPrice)
-	{
-		return CompletableFuture.runAsync(() -> recordTransaction(itemId, itemName, isBuy, quantity, pricePerItem, geSlot, recommendedSellPrice));
-	}
-
-	/**
-	 * Fetch active flips from the API
-	 */
-	public ActiveFlipsResponse getActiveFlips()
-	{
-		String apiUrl = getApiUrl();
-		
-		// Ensure we have a valid token
-		if (!ensureAuthenticated())
-		{
-			log.error("Failed to authenticate with API");
+			JsonObject responseObj = gson.fromJson(jsonData, JsonObject.class);
+			log.info("Transaction recorded: {}", responseObj.get("message").getAsString());
 			return null;
-		}
-
-		String url = String.format("%s/transactions/active-flips", apiUrl);
-		Request request = new Request.Builder()
-			.url(url)
-			.header("Authorization", "Bearer " + jwtToken)
-			.get()
-			.build();
-
-		try (Response response = httpClient.newCall(request).execute())
-		{
-			if (response.code() == 401)
-			{
-				// Token might have expired, try to re-authenticate once
-				jwtToken = null;
-				if (ensureAuthenticated())
-				{
-					// Retry the request with new token
-					Request retryRequest = new Request.Builder()
-						.url(url)
-						.header("Authorization", "Bearer " + jwtToken)
-						.get()
-						.build();
-					try (Response retryResponse = httpClient.newCall(retryRequest).execute())
-					{
-						if (!retryResponse.isSuccessful())
-						{
-							log.warn("API returned error for active flips after re-auth: {}", retryResponse.code());
-							return null;
-						}
-						String jsonData = retryResponse.body().string();
-						return gson.fromJson(jsonData, ActiveFlipsResponse.class);
-					}
-				}
-				return null;
-			}
-			
-			if (!response.isSuccessful())
-			{
-				log.warn("API returned error for active flips: {}", response.code());
-				return null;
-			}
-
-			String jsonData = response.body().string();
-			return gson.fromJson(jsonData, ActiveFlipsResponse.class);
-		}
-		catch (IOException e)
-		{
-			log.warn("Failed to fetch active flips: {}", e.getMessage());
-			return null;
-		}
+		}).thenApply(v -> null);
 	}
 
 	/**
-	 * Fetch active flips asynchronously
+	 * Fetch active flips from the API asynchronously
 	 */
 	public CompletableFuture<ActiveFlipsResponse> getActiveFlipsAsync()
 	{
-		return CompletableFuture.supplyAsync(() -> getActiveFlips());
-	}
-
-	/**
-	 * Dismiss an active flip (remove from tracking)
-	 */
-	public boolean dismissActiveFlip(int itemId)
-	{
 		String apiUrl = getApiUrl();
+		String url = String.format("%s/transactions/active-flips", apiUrl);
 		
-		// Ensure we have a valid token
-		if (!ensureAuthenticated())
-		{
-			log.error("Failed to authenticate with API");
-			return false;
-		}
-
-		String url = String.format("%s/transactions/active-flips/%d", apiUrl, itemId);
-		Request request = new Request.Builder()
+		Request.Builder requestBuilder = new Request.Builder()
 			.url(url)
-			.delete()
-			.header("Authorization", "Bearer " + jwtToken)
-			.build();
-
-		try (Response response = httpClient.newCall(request).execute())
-		{
-			if (response.code() == 401)
-			{
-				// Token might have expired, try to re-authenticate once
-				jwtToken = null;
-				if (ensureAuthenticated())
-				{
-					// Retry the request with new token
-					Request retryRequest = new Request.Builder()
-						.url(url)
-						.delete()
-						.header("Authorization", "Bearer " + jwtToken)
-						.build();
-					try (Response retryResponse = httpClient.newCall(retryRequest).execute())
-					{
-						if (retryResponse.isSuccessful())
-						{
-							log.info("Successfully dismissed active flip for item {}", itemId);
-							return true;
-						}
-						else
-						{
-							log.warn("Failed to dismiss active flip after re-auth: {}", retryResponse.code());
-							return false;
-						}
-					}
-				}
-				return false;
-			}
-			
-			if (response.isSuccessful())
-			{
-				log.info("Successfully dismissed active flip for item {}", itemId);
-				return true;
-			}
-			else
-			{
-				log.warn("Failed to dismiss active flip: {}", response.code());
-				return false;
-			}
-		}
-		catch (IOException e)
-		{
-			log.warn("Failed to dismiss active flip: {}", e.getMessage());
-			return false;
-		}
+			.get();
+		
+		return executeAuthenticatedAsync(requestBuilder, jsonData ->
+			gson.fromJson(jsonData, ActiveFlipsResponse.class));
 	}
 
 	/**
@@ -703,80 +585,38 @@ public class FlipSmartApiClient
 	 */
 	public CompletableFuture<Boolean> dismissActiveFlipAsync(int itemId)
 	{
-		return CompletableFuture.supplyAsync(() -> dismissActiveFlip(itemId));
-	}
-
-	/**
-	 * Fetch completed flips from the API
-	 */
-	public CompletedFlipsResponse getCompletedFlips(int limit)
-	{
 		String apiUrl = getApiUrl();
+		String url = String.format("%s/transactions/active-flips/%d", apiUrl, itemId);
 		
-		// Ensure we have a valid token
-		if (!ensureAuthenticated())
-		{
-			log.error("Failed to authenticate with API");
-			return null;
-		}
-
-		String url = String.format("%s/flips/completed?limit=%d", apiUrl, limit);
-		Request request = new Request.Builder()
+		Request.Builder requestBuilder = new Request.Builder()
 			.url(url)
-			.header("Authorization", "Bearer " + jwtToken)
-			.get()
-			.build();
-
-		try (Response response = httpClient.newCall(request).execute())
+			.delete();
+		
+		return executeAuthenticatedAsync(requestBuilder, jsonData ->
 		{
-			if (response.code() == 401)
-			{
-				// Token might have expired, try to re-authenticate once
-				jwtToken = null;
-				if (ensureAuthenticated())
-				{
-					// Retry the request with new token
-					Request retryRequest = new Request.Builder()
-						.url(url)
-						.header("Authorization", "Bearer " + jwtToken)
-						.get()
-						.build();
-					try (Response retryResponse = httpClient.newCall(retryRequest).execute())
-					{
-						if (!retryResponse.isSuccessful())
-						{
-							log.warn("API returned error for completed flips after re-auth: {}", retryResponse.code());
-							return null;
-						}
-						String jsonData = retryResponse.body().string();
-						return gson.fromJson(jsonData, CompletedFlipsResponse.class);
-					}
-				}
-				return null;
-			}
-			
-			if (!response.isSuccessful())
-			{
-				log.warn("API returned error for completed flips: {}", response.code());
-				return null;
-			}
-
-			String jsonData = response.body().string();
-			return gson.fromJson(jsonData, CompletedFlipsResponse.class);
-		}
-		catch (IOException e)
+			log.info("Successfully dismissed active flip for item {}", itemId);
+			return true;
+		}).exceptionally(e ->
 		{
-			log.warn("Failed to fetch completed flips: {}", e.getMessage());
-			return null;
-		}
+			log.warn("Failed to dismiss active flip: {}", e.getMessage());
+			return false;
+		});
 	}
 
 	/**
-	 * Fetch completed flips asynchronously
+	 * Fetch completed flips from the API asynchronously
 	 */
 	public CompletableFuture<CompletedFlipsResponse> getCompletedFlipsAsync(int limit)
 	{
-		return CompletableFuture.supplyAsync(() -> getCompletedFlips(limit));
+		String apiUrl = getApiUrl();
+		String url = String.format("%s/flips/completed?limit=%d", apiUrl, limit);
+		
+		Request.Builder requestBuilder = new Request.Builder()
+			.url(url)
+			.get();
+		
+		return executeAuthenticatedAsync(requestBuilder, jsonData ->
+			gson.fromJson(jsonData, CompletedFlipsResponse.class));
 	}
 
 	/**
@@ -820,4 +660,3 @@ public class FlipSmartApiClient
 		}
 	}
 }
-
